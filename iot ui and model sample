@@ -1,0 +1,765 @@
+{
+  "nbformat": 4,
+  "nbformat_minor": 0,
+  "metadata": {
+    "colab": {
+      "private_outputs": true,
+      "provenance": [],
+      "authorship_tag": "ABX9TyOjOiqTRRtXsZxCxFJtDndE",
+      "include_colab_link": true
+    },
+    "kernelspec": {
+      "name": "python3",
+      "display_name": "Python 3"
+    },
+    "language_info": {
+      "name": "python"
+    }
+  },
+  "cells": [
+    {
+      "cell_type": "markdown",
+      "metadata": {
+        "id": "view-in-github",
+        "colab_type": "text"
+      },
+      "source": [
+        "<a href=\"https://colab.research.google.com/github/omkarcult/Aircraft-propulsion-/blob/main/iot%20ui%20and%20model%20sample\" target=\"_parent\"><img src=\"https://colab.research.google.com/assets/colab-badge.svg\" alt=\"Open In Colab\"/></a>"
+      ]
+    },
+    {
+      "cell_type": "code",
+      "execution_count": null,
+      "metadata": {
+        "id": "8dWbP53OwK97"
+      },
+      "outputs": [],
+      "source": [
+        "import pandas as pd\n",
+        "import numpy as np\n",
+        "\n",
+        "# 1. Load Data\n",
+        "col_names = ['unit', 'cycles', 'os1', 'os2', 'os3'] + [f's{i}' for i in range(1, 22)]\n",
+        "df = pd.read_csv('train_FD001.txt', sep='\\s+', header=None, names=col_names)\n",
+        "\n",
+        "# 2. Add Physics-Informed Features (Thermodynamics)\n",
+        "# Pressure Ratio (s12 is LPC outlet, s7 is inlet)\n",
+        "df['LPC_Pressure_Ratio'] = df['s12'] / df['s7']\n",
+        "\n",
+        "# Temperature-Speed Relationship (s3 is HPC outlet temp, s9 is fan speed)\n",
+        "# Physically, if temp rises while speed is constant, the engine is working too hard (inefficient)\n",
+        "df['Thermal_Stress_Index'] = df['s3'] / df['s9']\n",
+        "\n",
+        "# Corrected Core Speed (Physical Speed / sqrt(Inlet Temp))\n",
+        "df['Corrected_Core_Speed'] = df['s15'] / np.sqrt(df['s2'])\n",
+        "\n",
+        "print(\"Physics features added successfully!\")"
+      ]
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "# Calculate Remaining Useful Life (RUL) for each unit\n",
+        "max_cycles = df.groupby('unit')['cycles'].transform('max')\n",
+        "df['RUL'] = max_cycles - df['cycles']"
+      ],
+      "metadata": {
+        "id": "Ao4PN1V-xPrX"
+      },
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "from sklearn.preprocessing import StandardScaler\n",
+        "from tensorflow.keras.models import Sequential\n",
+        "from tensorflow.keras.layers import Dense\n",
+        "\n",
+        "# Select our Physics-based features + raw sensors\n",
+        "features = ['LPC_Pressure_Ratio', 'Thermal_Stress_Index', 'Corrected_Core_Speed', 's2', 's3', 's4', 's7', 's11', 's12', 's15']\n",
+        "X = df[features]\n",
+        "y = df['RUL']\n",
+        "\n",
+        "# Scale the data (Crucial for Neural Networks)\n",
+        "scaler = StandardScaler()\n",
+        "X_scaled = scaler.fit_transform(X)\n",
+        "\n",
+        "# Build the Model (A 3-layer Neural Network)\n",
+        "model = Sequential([\n",
+        "    Dense(32, activation='relu', input_shape=(X_scaled.shape[1],)),\n",
+        "    Dense(16, activation='relu'),\n",
+        "    Dense(1, activation='linear') # Linear because we are predicting a number (cycles)\n",
+        "])\n",
+        "\n",
+        "model.compile(optimizer='adam', loss='mse', metrics=['mae'])\n",
+        "model.fit(X_scaled, y, epochs=20, batch_size=32, validation_split=0.2)"
+      ],
+      "metadata": {
+        "id": "YuB5KHkHxTZi"
+      },
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "import matplotlib.pyplot as plt\n",
+        "\n",
+        "# Plotting the training history\n",
+        "plt.figure(figsize=(10, 5))\n",
+        "plt.plot(model.history.history['loss'], label='Training Loss (Physics Error)')\n",
+        "plt.plot(model.history.history['val_loss'], label='Validation Loss')\n",
+        "plt.title('Model Learning: Physics-Informed Convergence')\n",
+        "plt.xlabel('Epochs (Training Rounds)')\n",
+        "plt.ylabel('Mean Squared Error')\n",
+        "plt.legend()\n",
+        "plt.grid(True)\n",
+        "plt.show()"
+      ],
+      "metadata": {
+        "id": "voXWB31dxoJW"
+      },
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "# Pick one engine unit to visualize the physical degradation\n",
+        "sample_unit = df[df['unit'] == 1]\n",
+        "\n",
+        "plt.figure(figsize=(12, 5))\n",
+        "plt.plot(sample_unit['cycles'], sample_unit['LPC_Pressure_Ratio'], color='darkorange', linewidth=2)\n",
+        "plt.title('Physical Degradation: LPC Pressure Ratio vs. Engine Cycles')\n",
+        "plt.xlabel('Cycles (Time)')\n",
+        "plt.ylabel('Pressure Ratio (P12/P7)')\n",
+        "plt.grid(True)\n",
+        "plt.show()"
+      ],
+      "metadata": {
+        "id": "j6aRjuwWxqEL"
+      },
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "model.save('piml_turbine_model.h5')\n",
+        "print(\"Physics-Informed Model saved as piml_turbine_model.h5\")"
+      ],
+      "metadata": {
+        "id": "KuqbZ9hvxtoC"
+      },
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "# 1. Load the Test Data\n",
+        "test_df = pd.read_csv('test_FD001.txt', sep='\\s+', header=None, names=col_names)\n",
+        "\n",
+        "# 2. Apply the same \"Physics Engineering\" to the Test Data\n",
+        "test_df['LPC_Pressure_Ratio'] = test_df['s12'] / test_df['s7']\n",
+        "test_df['Thermal_Stress_Index'] = test_df['s3'] / test_df['s9']\n",
+        "test_df['Corrected_Core_Speed'] = test_df['s15'] / np.sqrt(test_df['s2'])\n",
+        "\n",
+        "# 3. Get the last recorded cycle for each engine (the \"Current State\")\n",
+        "X_test_last = test_df.groupby('unit').last().reset_index()\n",
+        "X_test_physics = X_test_last[features]\n",
+        "\n",
+        "# 4. Scale and Predict\n",
+        "X_test_scaled = scaler.transform(X_test_physics)\n",
+        "test_predictions = model.predict(X_test_scaled)\n",
+        "\n",
+        "print(\"Predictions for Test Engines completed!\")"
+      ],
+      "metadata": {
+        "id": "aGIXfmv9x0vx"
+      },
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "results_df = pd.DataFrame({\n",
+        "    'Engine_Unit': X_test_last['unit'],\n",
+        "    'Predicted_RUL_Cycles': test_predictions.flatten().astype(int)\n",
+        "})\n",
+        "\n",
+        "# Add a \"Maintenance Status\" based on Physics thresholds\n",
+        "results_df['Status'] = np.where(results_df['Predicted_RUL_Cycles'] > 50, 'Healthy',\n",
+        "                       np.where(results_df['Predicted_RUL_Cycles'] > 20, 'Urgent Check', 'Immediate Maintenance'))\n",
+        "\n",
+        "print(results_df.head(10))"
+      ],
+      "metadata": {
+        "id": "LtPzZHIUx2qu"
+      },
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "import seaborn as sns\n",
+        "import matplotlib.pyplot as plt\n",
+        "\n",
+        "plt.figure(figsize=(10, 6))\n",
+        "sns.histplot(results_df['Predicted_RUL_Cycles'], bins=15, kde=True, color='crimson')\n",
+        "plt.axvline(x=30, color='black', linestyle='--', label='Critical Maintenance Threshold')\n",
+        "plt.title('Fleet Health Distribution: Predicted Remaining Life')\n",
+        "plt.xlabel('Predicted Cycles until Failure')\n",
+        "plt.ylabel('Number of Engines')\n",
+        "plt.legend()\n",
+        "plt.grid(axis='y', alpha=0.3)\n",
+        "plt.show()"
+      ],
+      "metadata": {
+        "id": "AUrDDrxXyHW3"
+      },
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "# Save the results to a file\n",
+        "results_df.to_csv('Engine_Health_Report.csv', index=False)\n",
+        "print(\"File 'Engine_Health_Report.csv' is ready! Look in the folder icon on the left to download it.\")"
+      ],
+      "metadata": {
+        "id": "1MvTn_oJyLvI"
+      },
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "# Merge predictions back to see the link\n",
+        "X_test_last['Predicted_RUL'] = test_predictions\n",
+        "\n",
+        "plt.figure(figsize=(10, 6))\n",
+        "sns.regplot(x='LPC_Pressure_Ratio', y='Predicted_RUL', data=X_test_last,\n",
+        "            scatter_kws={'alpha':0.5}, line_kws={'color':'red'})\n",
+        "plt.title('Physics-AI Correlation: Pressure Ratio vs. Predicted Life')\n",
+        "plt.xlabel('LPC Pressure Ratio (Physical Sensor)')\n",
+        "plt.ylabel('AI Predicted Life (Cycles)')\n",
+        "plt.grid(True)\n",
+        "plt.show()"
+      ],
+      "metadata": {
+        "id": "yW78-5IWyPKq"
+      },
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "!pip install streamlit -q"
+      ],
+      "metadata": {
+        "id": "Xnq_iFW6yY3U"
+      },
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "%%writefile iot_dashboard.py\n",
+        "import streamlit as st\n",
+        "import pandas as pd\n",
+        "import numpy as np\n",
+        "import tensorflow as tf\n",
+        "import time\n",
+        "\n",
+        "# --- SETUP ---\n",
+        "st.set_page_config(page_title=\"IoT Turbine Health Monitor\", layout=\"wide\")\n",
+        "st.title(\"🛡️ IoT Gas Turbine: Physics-Informed Health Monitor\")\n",
+        "\n",
+        "# --- LOAD MODEL ---\n",
+        "@st.cache_resource\n",
+        "def load_my_model():\n",
+        "    return tf.keras.models.load_model('piml_turbine_model.h5')\n",
+        "\n",
+        "model = load_my_model()\n",
+        "\n",
+        "# --- SIDEBAR CONTROL ---\n",
+        "st.sidebar.header(\"Engine Selection\")\n",
+        "engine_id = st.sidebar.number_input(\"Select Engine Unit ID\", min_value=1, max_value=100, value=1)\n",
+        "\n",
+        "# --- LOAD DATA ---\n",
+        "df = pd.read_csv('test_FD001.txt', sep='\\s+', header=None)\n",
+        "# Column Mapping for PIML\n",
+        "df.columns = ['unit', 'cycles', 'os1', 'os2', 'os3'] + [f's{i}' for i in range(1, 22)]\n",
+        "engine_data = df[df['unit'] == engine_id]\n",
+        "\n",
+        "# --- LIVE SIMULATION LOOP ---\n",
+        "st.subheader(f\"Live Feed: Engine Unit #{engine_id}\")\n",
+        "col1, col2, col3 = st.columns(3)\n",
+        "health_metric = col1.empty()\n",
+        "press_metric = col2.empty()\n",
+        "alert_status = col3.empty()\n",
+        "\n",
+        "chart_placeholder = st.empty()\n",
+        "\n",
+        "if st.button(\"Start Live Monitoring\"):\n",
+        "    history = []\n",
+        "    for i in range(len(engine_data)):\n",
+        "        row = engine_data.iloc[i:i+1]\n",
+        "\n",
+        "        # Calculate Physics Features on the fly\n",
+        "        lpc_ratio = row['s12'].values[0] / row['s7'].values[0]\n",
+        "        therm_idx = row['s3'].values[0] / row['s9'].values[0]\n",
+        "        corr_speed = row['s15'].values[0] / np.sqrt(row['s2'].values[0])\n",
+        "\n",
+        "        # Prepare for Prediction\n",
+        "        # Note: Order must match the 'features' list from your training!\n",
+        "        input_data = np.array([[lpc_ratio, therm_idx, corr_speed,\n",
+        "                               row['s2'].values[0], row['s3'].values[0], row['s4'].values[0],\n",
+        "                               row['s7'].values[0], row['s11'].values[0], row['s12'].values[0],\n",
+        "                               row['s15'].values[0]]])\n",
+        "\n",
+        "        # In a real app, you'd use your scaler here. For demo:\n",
+        "        prediction = model.predict(input_data, verbose=0)[0][0]\n",
+        "\n",
+        "        # Update UI\n",
+        "        health_metric.metric(\"Predicted Life (Cycles)\", f\"{int(prediction)}\")\n",
+        "        press_metric.metric(\"LPC Pressure Ratio\", f\"{lpc_ratio:.4f}\")\n",
+        "\n",
+        "        if prediction > 50:\n",
+        "            alert_status.success(\"NORMAL OPERATION\")\n",
+        "        elif prediction > 20:\n",
+        "            alert_status.warning(\"MAINTENANCE REQUIRED\")\n",
+        "        else:\n",
+        "            alert_status.error(\"CRITICAL: SHUTDOWN ADVISED\")\n",
+        "\n",
+        "        history.append(lpc_ratio)\n",
+        "        chart_placeholder.line_chart(history)\n",
+        "        time.sleep(0.1)"
+      ],
+      "metadata": {
+        "id": "6HChLOQWyeyi"
+      },
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "!wget -q -O - ipv4.icanhazip.com"
+      ],
+      "metadata": {
+        "id": "ICd17NMXykYT"
+      },
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "!streamlit run iot_dashboard.py & npx localtunnel --port 8501"
+      ],
+      "metadata": {
+        "id": "0nIdEVzgykk5"
+      },
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "!pip install pyngrok -q\n",
+        "from pyngrok import ngrok\n",
+        "\n",
+        "# Authenticate Ngrok with your token\n",
+        "ngrok.set_auth_token(\"YOUR_TOKEN_HERE\")"
+      ],
+      "metadata": {
+        "id": "AkF6P1x1zlGl"
+      },
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "!rm iot_dashboard.py\n",
+        "from pyngrok import ngrok\n",
+        "ngrok.kill()"
+      ],
+      "metadata": {
+        "id": "Y0Kq1BGm0L1N"
+      },
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "%%writefile iot_dashboard.py\n",
+        "import streamlit as st\n",
+        "import pandas as pd\n",
+        "import numpy as np\n",
+        "import tensorflow as tf\n",
+        "import time\n",
+        "from sklearn.preprocessing import StandardScaler\n",
+        "\n",
+        "st.set_page_config(page_title=\"IoT Turbine Monitor\", layout=\"wide\")\n",
+        "st.title(\"🛡️ IoT Gas Turbine Health Monitor\")\n",
+        "\n",
+        "# --- DATA & MODEL LOADING ---\n",
+        "@st.cache_resource\n",
+        "def load_resources():\n",
+        "    # Load model\n",
+        "    model = tf.keras.models.load_model('piml_turbine_model.h5')\n",
+        "\n",
+        "    # Re-create and fit the scaler so it matches your training exactly\n",
+        "    col_names = ['unit', 'cycles', 'os1', 'os2', 'os3'] + [f's{i}' for i in range(1, 22)]\n",
+        "    train_df = pd.read_csv('train_FD001.txt', sep='\\s+', header=None, names=col_names)\n",
+        "\n",
+        "    # Physics features for scaling\n",
+        "    train_df['LPC_Pressure_Ratio'] = train_df['s12'] / train_df['s7']\n",
+        "    train_df['Thermal_Stress_Index'] = train_df['s3'] / train_df['s9']\n",
+        "    train_df['Corrected_Core_Speed'] = train_df['s15'] / np.sqrt(train_df['s2'])\n",
+        "\n",
+        "    features = ['LPC_Pressure_Ratio', 'Thermal_Stress_Index', 'Corrected_Core_Speed',\n",
+        "                's2', 's3', 's4', 's7', 's11', 's12', 's15']\n",
+        "\n",
+        "    scaler = StandardScaler()\n",
+        "    scaler.fit(train_df[features])\n",
+        "\n",
+        "    return model, scaler, features\n",
+        "\n",
+        "try:\n",
+        "    model, scaler, features_list = load_resources()\n",
+        "except Exception as e:\n",
+        "    st.error(f\"Error loading model/data: {e}. Make sure 'piml_turbine_model.h5' and 'train_FD001.txt' are uploaded!\")\n",
+        "    st.stop()\n",
+        "\n",
+        "# --- UI ELEMENTS ---\n",
+        "engine_id = st.sidebar.number_input(\"Engine ID\", 1, 100, 1)\n",
+        "test_df = pd.read_csv('test_FD001.txt', sep='\\s+', header=None)\n",
+        "test_df.columns = ['unit', 'cycles', 'os1', 'os2', 'os3'] + [f's{i}' for i in range(1, 22)]\n",
+        "engine_data = test_df[test_df['unit'] == engine_id]\n",
+        "\n",
+        "if st.button(\"Start Live Monitor\"):\n",
+        "    h_metric = st.empty()\n",
+        "    chart = st.empty()\n",
+        "    history = []\n",
+        "\n",
+        "    for i in range(len(engine_data)):\n",
+        "        row = engine_data.iloc[i:i+1]\n",
+        "\n",
+        "        # Calculate Physics\n",
+        "        lpc = row['s12'].values[0] / row['s7'].values[0]\n",
+        "        therm = row['s3'].values[0] / row['s9'].values[0]\n",
+        "        speed = row['s15'].values[0] / np.sqrt(row['s2'].values[0])\n",
+        "\n",
+        "        # Prepare Input\n",
+        "        raw_input = [lpc, therm, speed, row['s2'].values[0], row['s3'].values[0],\n",
+        "                     row['s4'].values[0], row['s7'].values[0], row['s11'].values[0],\n",
+        "                     row['s12'].values[0], row['s15'].values[0]]\n",
+        "\n",
+        "        scaled_input = scaler.transform([raw_input])\n",
+        "        prediction = model.predict(scaled_input, verbose=0)[0][0]\n",
+        "\n",
+        "        h_metric.metric(\"Predicted Life Remaining\", f\"{int(prediction)} Cycles\")\n",
+        "        history.append(lpc)\n",
+        "        chart.line_chart(history)\n",
+        "        time.sleep(0.1)"
+      ],
+      "metadata": {
+        "id": "KMJHiFQS0PwN"
+      },
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "from google.colab import output\n",
+        "import threading\n",
+        "\n",
+        "def run_st():\n",
+        "    !streamlit run iot_dashboard.py --server.port 8501\n",
+        "\n",
+        "threading.Thread(target=run_st).start()\n",
+        "output.serve_kernel_port_as_window(8501)"
+      ],
+      "metadata": {
+        "id": "yyJMTJ5v0VQo"
+      },
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "from google.colab import output\n",
+        "\n",
+        "# This will display the dashboard right here in the output area\n",
+        "output.serve_kernel_port_as_iframe(8501)"
+      ],
+      "metadata": {
+        "id": "atqUxN810nLP"
+      },
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "!pip install streamlit -q\n",
+        "!wget https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb\n",
+        "!dpkg -i cloudflared-linux-amd64.deb\n",
+        "\n",
+        "import subprocess\n",
+        "import threading\n",
+        "\n",
+        "# Run streamlit in the background\n",
+        "def run_streamlit():\n",
+        "    !streamlit run iot_dashboard.py --server.port 8501\n",
+        "\n",
+        "threading.Thread(target=run_streamlit).start()\n",
+        "\n",
+        "# Launch Cloudflare tunnel\n",
+        "p = subprocess.Popen([\"cloudflared\", \"tunnel\", \"--url\", \"http://localhost:8501\"],\n",
+        "                     stdout=subprocess.PIPE, stderr=subprocess.STDOUT)\n",
+        "\n",
+        "# Print the URL\n",
+        "for line in iter(p.stdout.readline, b''):\n",
+        "    line = line.decode('utf-8')\n",
+        "    if \"trycloudflare.com\" in line:\n",
+        "        print(\"\\n\\n✅ YOUR DASHBOARD LINK IS HERE:\")\n",
+        "        print(line.strip().split(\" \")[-1])\n",
+        "        print(\"----------------------------------\\n\")"
+      ],
+      "metadata": {
+        "id": "71fQb2sE1LqH"
+      },
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "import time\n",
+        "import subprocess\n",
+        "\n",
+        "# This looks specifically for the tunnel URL in the logs\n",
+        "def get_url():\n",
+        "    print(\"Searching for your public link... (Wait 15 seconds)\")\n",
+        "    time.sleep(15)\n",
+        "    !grep -o 'https://[-0-9a-z]*\\.trycloudflare.com' cloudflare_log.txt || echo \"Link not found yet, try again in 5 seconds.\"\n",
+        "\n",
+        "# Start the tunnel and save the log to a file we can read\n",
+        "!nohup cloudflared tunnel --url http://localhost:8501 > cloudflare_log.txt 2>&1 &\n",
+        "get_url()"
+      ],
+      "metadata": {
+        "id": "Aogk__s03LoQ"
+      },
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "# 1. Kill everything first\n",
+        "!pkill streamlit\n",
+        "!pkill cloudflared\n",
+        "\n",
+        "import time\n",
+        "import subprocess\n",
+        "import threading\n",
+        "\n",
+        "# 2. Function to run Streamlit\n",
+        "def run_streamlit():\n",
+        "    # We add --server.address=0.0.0.0 to make it easier for the tunnel to find\n",
+        "    !streamlit run iot_dashboard.py --server.port 8501 --server.address=0.0.0.0\n",
+        "\n",
+        "# 3. Start Streamlit in the background\n",
+        "threading.Thread(target=run_streamlit).start()\n",
+        "print(\"Starting Streamlit... (Waiting 10 seconds)\")\n",
+        "time.sleep(10)\n",
+        "\n",
+        "# 4. Start Cloudflare and print the link\n",
+        "print(\"Opening the Tunnel...\")\n",
+        "!nohup cloudflared tunnel --url http://localhost:8501 > cloudflare.log 2>&1 &\n",
+        "time.sleep(5)\n",
+        "\n",
+        "# 5. Extract and print the link\n",
+        "!grep -o 'https://[-0-9a-z]*\\.trycloudflare.com' cloudflare.log"
+      ],
+      "metadata": {
+        "id": "xgd3kQHJ3o_M"
+      },
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "%%writefile iot_dashboard.py\n",
+        "import streamlit as st\n",
+        "import pandas as pd\n",
+        "import numpy as np\n",
+        "import tensorflow as tf\n",
+        "import time\n",
+        "from sklearn.preprocessing import StandardScaler\n",
+        "\n",
+        "st.set_page_config(page_title=\"IoT Turbine Monitor\", layout=\"wide\")\n",
+        "st.title(\"🛡️ IoT Gas Turbine Health Monitor\")\n",
+        "\n",
+        "# --- DATA & MODEL LOADING ---\n",
+        "@st.cache_resource\n",
+        "def load_resources():\n",
+        "    # FIX: compile=False avoids the 'keras.metrics.mse' deserialization error\n",
+        "    model = tf.keras.models.load_model('piml_turbine_model.h5', compile=False)\n",
+        "\n",
+        "    col_names = ['unit', 'cycles', 'os1', 'os2', 'os3'] + [f's{i}' for i in range(1, 22)]\n",
+        "    train_df = pd.read_csv('train_FD001.txt', sep='\\s+', header=None, names=col_names)\n",
+        "\n",
+        "    # Physics features\n",
+        "    train_df['LPC_Pressure_Ratio'] = train_df['s12'] / train_df['s7']\n",
+        "    train_df['Thermal_Stress_Index'] = train_df['s3'] / train_df['s9']\n",
+        "    train_df['Corrected_Core_Speed'] = train_df['s15'] / np.sqrt(train_df['s2'])\n",
+        "\n",
+        "    features = ['LPC_Pressure_Ratio', 'Thermal_Stress_Index', 'Corrected_Core_Speed',\n",
+        "                's2', 's3', 's4', 's7', 's11', 's12', 's15']\n",
+        "\n",
+        "    scaler = StandardScaler()\n",
+        "    scaler.fit(train_df[features])\n",
+        "\n",
+        "    return model, scaler, features\n",
+        "\n",
+        "try:\n",
+        "    model, scaler, features_list = load_resources()\n",
+        "except Exception as e:\n",
+        "    st.error(f\"Error loading model/data: {e}\")\n",
+        "    st.stop()\n",
+        "\n",
+        "# --- UI ELEMENTS ---\n",
+        "engine_id = st.sidebar.number_input(\"Engine ID\", 1, 100, 1)\n",
+        "test_df = pd.read_csv('test_FD001.txt', sep='\\s+', header=None)\n",
+        "test_df.columns = ['unit', 'cycles', 'os1', 'os2', 'os3'] + [f's{i}' for i in range(1, 22)]\n",
+        "engine_data = test_df[test_df['unit'] == engine_id]\n",
+        "\n",
+        "if st.button(\"Start Live Monitor\"):\n",
+        "    h_metric = st.empty()\n",
+        "    chart = st.empty()\n",
+        "    history = []\n",
+        "\n",
+        "    for i in range(len(engine_data)):\n",
+        "        row = engine_data.iloc[i:i+1]\n",
+        "        lpc = row['s12'].values[0] / row['s7'].values[0]\n",
+        "        therm = row['s3'].values[0] / row['s9'].values[0]\n",
+        "        speed = row['s15'].values[0] / np.sqrt(row['s2'].values[0])\n",
+        "\n",
+        "        raw_input = [lpc, therm, speed, row['s2'].values[0], row['s3'].values[0],\n",
+        "                     row['s4'].values[0], row['s7'].values[0], row['s11'].values[0],\n",
+        "                     row['s12'].values[0], row['s15'].values[0]]\n",
+        "\n",
+        "        scaled_input = scaler.transform([raw_input])\n",
+        "        prediction = model.predict(scaled_input, verbose=0)[0][0]\n",
+        "\n",
+        "        h_metric.metric(\"Predicted Life Remaining\", f\"{int(prediction)} Cycles\")\n",
+        "        history.append(lpc)\n",
+        "        chart.line_chart(history)\n",
+        "        time.sleep(0.05)"
+      ],
+      "metadata": {
+        "id": "kX1Ms2aG4QWL"
+      },
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "!pkill streamlit\n",
+        "!pkill cloudflared\n",
+        "!pkill npx"
+      ],
+      "metadata": {
+        "id": "fJsjWjDG1v7w"
+      },
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "!fuser -k 8501/tcp"
+      ],
+      "metadata": {
+        "id": "H7IdE4O-2VnT"
+      },
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "# 1. Kill old processes\n",
+        "!pkill streamlit\n",
+        "!pkill cloudflared\n",
+        "\n",
+        "import time\n",
+        "import threading\n",
+        "\n",
+        "# 2. Start the UPDATED Streamlit in the background\n",
+        "def run_streamlit():\n",
+        "    !streamlit run iot_dashboard.py --server.port 8501 --server.address=0.0.0.0\n",
+        "\n",
+        "threading.Thread(target=run_streamlit).start()\n",
+        "print(\"Starting the fixed Dashboard... (Wait 15 seconds)\")\n",
+        "time.sleep(15)\n",
+        "\n",
+        "# 3. Open a fresh Tunnel\n",
+        "print(\"Generating your new Public Link...\")\n",
+        "!nohup cloudflared tunnel --url http://localhost:8501 > cloudflare.log 2>&1 &\n",
+        "time.sleep(5)\n",
+        "\n",
+        "# 4. Show the link\n",
+        "!grep -o 'https://[-0-9a-z]*\\.trycloudflare.com' cloudflare.log"
+      ],
+      "metadata": {
+        "id": "NVXR1Tev5NxO"
+      },
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "!grep -o 'https://[-0-9a-z]*\\.trycloudflare.com' cloudflare.log"
+      ],
+      "metadata": {
+        "id": "pGSRijnW5f_F"
+      },
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "!pip install streamlit pyngrok pyyaml==5.4.1 -q\n",
+        "!wget https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb\n",
+        "!dpkg -i cloudflared-linux-amd64.deb"
+      ],
+      "metadata": {
+        "id": "tCv9B6jd_e60"
+      },
+      "execution_count": null,
+      "outputs": []
+    }
+  ]
+}
